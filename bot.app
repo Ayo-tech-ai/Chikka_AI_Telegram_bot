@@ -2,7 +2,7 @@ import os
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 
 # Load your bot token
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8263771292:AAHyblrWGGpLX__QB-D3vqntaatncvGSHHQ")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "API")
 
 # Start command
 async def start(update, context):
