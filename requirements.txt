@@ -1,1 +1,8 @@
-python-telegram-bot==20.6
+python-telegram-bot==20.7
+langchain
+langchain-community
+langchain-groq
+langchain-huggingface
+faiss-cpu
+sentence-transformers
+huggingface-hub
