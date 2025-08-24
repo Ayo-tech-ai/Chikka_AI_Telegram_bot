@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import json
 from flask import Flask
 from telegram import Update
 from telegram.ext import (
@@ -10,10 +11,10 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
-from langchain_groq import ChatGroq
-from langchain.chains import RetrievalQA
-from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings  # Changed import
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
+import groq
 import asyncio
 
 # === Logging ===
@@ -23,7 +24,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Flask Server (for uptime monitoring) ===
+# === Flask Server ===
 flask_app = Flask(__name__)
 
 @flask_app.route("/")
@@ -35,46 +36,115 @@ def run_flask():
 
 # === Load AI Components ===
 FAISS_PATH = "rag_assets/faiss_index"
+INDEX_METADATA_PATH = "rag_assets/index_metadata.json"
 
-def load_ai_components():
-    """Load vectorstore + Groq LLM and return QA chain"""
-    try:
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+class SimpleRAGBot:
+    def __init__(self):
+        self.embedder = None
+        self.index = None
+        self.documents = []
+        self.groq_client = None
+        self.load_components()
+    
+    def load_components(self):
+        try:
+            # Load embeddings model
+            self.embedder = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+            logger.info("✅ Embeddings model loaded")
+            
+            # Load FAISS index
+            if os.path.exists(FAISS_PATH):
+                self.index = faiss.read_index(FAISS_PATH)
+                logger.info("✅ FAISS index loaded")
+            else:
+                logger.warning("⚠️ FAISS index not found")
+                return False
+            
+            # Load document metadata
+            if os.path.exists(INDEX_METADATA_PATH):
+                with open(INDEX_METADATA_PATH, 'r') as f:
+                    metadata = json.load(f)
+                    self.documents = metadata.get('documents', [])
+                logger.info(f"✅ Loaded {len(self.documents)} documents")
+            else:
+                logger.warning("⚠️ Index metadata not found")
+            
+            # Initialize Groq client
+            groq_key = os.getenv("GROQ_API_KEY")
+            if groq_key:
+                self.groq_client = groq.Groq(api_key=groq_key)
+                logger.info("✅ Groq client initialized")
+            else:
+                logger.warning("⚠️ GROQ_API_KEY not set")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Error loading components: {e}")
+            return False
+    
+    def search_similar_documents(self, query, k=3):
+        """Search for similar documents using FAISS"""
+        if not self.index or not self.embedder:
+            return []
+        
+        # Embed the query
+        query_embedding = self.embedder.encode([query])
+        query_embedding = np.array(query_embedding).astype('float32')
+        
+        # Search in FAISS index
+        distances, indices = self.index.search(query_embedding, k)
+        
+        # Get relevant documents
+        results = []
+        for i, idx in enumerate(indices[0]):
+            if idx < len(self.documents):
+                results.append({
+                    'content': self.documents[idx],
+                    'distance': distances[0][i]
+                })
+        
+        return results
+    
+    async def generate_response(self, query):
+        """Generate response using Groq API with RAG context"""
+        if not self.groq_client:
+            return "❌ AI service is currently unavailable. Please check API configuration."
+        
+        # Get relevant context
+        relevant_docs = self.search_similar_documents(query)
+        context = "\n".join([doc['content'] for doc in relevant_docs[:2]])  # Use top 2 docs
+        
+        # Create prompt with context
+        prompt = f"""You are Chikka, an expert broiler farming assistant. Use the following knowledge to answer the user's question.
 
-        if not os.path.exists(FAISS_PATH):
-            logger.warning(f"⚠️ FAISS index not found at {FAISS_PATH}")
-            return None
+Relevant knowledge:
+{context}
 
-        vectorstore = FAISS.load_local(
-            FAISS_PATH,
-            embeddings,
-            allow_dangerous_deserialization=True,
-        )
+User's question: {query}
 
-        groq_key = os.getenv("GROQ_API_KEY")
-        if not groq_key:
-            logger.warning("⚠️ GROQ_API_KEY not set - AI functionality disabled")
-            return None
+Provide a helpful, expert response based on the knowledge above. If the knowledge doesn't contain the answer, say you don't have that specific information but offer related advice."""
 
-        llm = ChatGroq(
-            groq_api_key=groq_key,
-            model="llama-3.3-70b-versatile",
-        )
+        try:
+            # Call Groq API directly
+            completion = self.groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": "You are Chikka, a friendly expert in backyard broiler farming."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.7,
+                max_tokens=1000
+            )
+            
+            return completion.choices[0].message.content
+            
+        except Exception as e:
+            logger.error(f"Error calling Groq API: {e}")
+            return "❌ Sorry, I encountered an error processing your request. Please try again."
 
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            retriever=vectorstore.as_retriever(),
-            return_source_documents=False,
-        )
-
-        logger.info("✅ AI components loaded successfully")
-        return qa_chain
-
-    except Exception as e:
-        logger.error(f"❌ Error loading AI components: {e}")
-        return None
-
-qa_chain = load_ai_components()
+# Initialize the bot
+rag_bot = SimpleRAGBot()
 
 # === Telegram Commands ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,13 +179,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Message Handler ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if qa_chain is None:
+    if not rag_bot.groq_client:
         await update.message.reply_text(
-            "❌ Knowledge base unavailable.\n\n"
-            "Possible reasons:\n"
-            "• FAISS index missing\n"
-            "• GROQ_API_KEY not set\n"
-            "• Technical maintenance",
+            "❌ AI service is currently unavailable.\n\n"
+            "Please check if GROQ_API_KEY is properly configured.",
             parse_mode="Markdown",
         )
         return
@@ -124,15 +191,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
     try:
-        # Run AI call in a separate thread (non-blocking)
+        # Generate response using our simple RAG system
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, qa_chain.run, user_query)
-
+        result = await loop.run_in_executor(None, lambda: rag_bot.generate_response(user_query))
+        
         if not result:
-            result = "⚠️ Sorry, I couldn't generate an answer for that."
+            result = "⚠️ Sorry, I couldn't generate an answer for that question."
 
+        # Telegram has 4096 character limit
         if len(result) > 4000:
-            result = result[:4000] + "\n\n📝 Response truncated due to Telegram limits."
+            result = result[:4000] + "\n\n📝 Response truncated due to length limits."
 
         await update.message.reply_text(result, parse_mode="Markdown")
 
@@ -140,9 +208,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error processing query: {e}")
         await update.message.reply_text(
             "❌ Error processing your question.\n\n"
-            "• AI service issue\n"
-            "• Query too complex\n"
-            "• Try again later",
+            "Please try again in a moment.",
             parse_mode="Markdown",
         )
 
