@@ -1,1 +1,31 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 
+# Virtual environment
+venv/
+.env/
+.venv/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+
+# Streamlit / cache folders (not used in Telegram bot but just in case)
+.streamlit/
+
+# Ignore environment / secrets files
+*.env
+secrets.json
+
+# ⚠️ Do NOT ignore FAISS index files!
+# We want to keep rag_assets/faiss_index/ in Git
+# So we
