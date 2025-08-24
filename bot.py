@@ -3,11 +3,17 @@ import logging
 import threading
 from flask import Flask
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler,
+    ContextTypes,
+    filters,
+)
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings  # Changed import
 import asyncio
 
 # === Logging ===
