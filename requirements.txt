@@ -5,22 +5,26 @@ python-telegram-bot==20.7
 flask==2.3.3
 
 # === LangChain & AI Integration ===
-langchain==0.0.349
+langchain==0.1.16
 langchain-groq==0.1.1
-langchain-community==0.0.20
+langchain-community==0.0.36
 
 # === Vector Database & Embeddings ===
-faiss-cpu==1.7.4
-sentence-transformers==2.2.2
+faiss-cpu==1.8.0
+sentence-transformers==2.7.0
 
 # === Core Machine Learning Libraries ===
-torch==2.0.1
-transformers==4.33.3
+torch==2.2.2
+transformers==4.40.1
 
 # === Utilities & Dependencies ===
 requests==2.31.0
-numpy==1.24.3
-tqdm==4.65.0
+numpy==1.26.4
+tqdm==4.66.4
 
 # === Async Support ===
-aiohttp==3.8.5
+aiohttp==3.9.5
+
+# === Additional Dependencies ===
+huggingface-hub==0.23.2
+protobuf==4.25.3
