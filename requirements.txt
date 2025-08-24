@@ -1,16 +1,9 @@
-# Core Bot
-python-telegram-bot==20.7
-flask==2.3.3
-
-# FAISS for vector storage
-faiss-cpu==1.8.0
-
-# Hugging Face for embeddings
-sentence-transformers==2.7.0
-
-# Groq API directly
-groq==0.7.0
-
-# Utilities
 requests==2.31.0
 numpy==1.26.4
+
+flask
+python-telegram-bot==20.3
+faiss-cpu==1.7.4
+numpy
+sentence-transformers
+groq
