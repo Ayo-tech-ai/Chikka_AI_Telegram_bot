@@ -1,113 +1,80 @@
 import os
 import logging
-import re
-import datetime
-from typing import List, Dict
-
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
-
+from flask import Flask, request
+from telegram import Update, Bot
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
-from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 
-# =======================
-# Logging
-# =======================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
+# --------------------
+# Logging setup
+# --------------------
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# =======================
-# Load FAISS
-# =======================
+# --------------------
+# Flask app
+# --------------------
+app = Flask(__name__)
+
+# --------------------
+# Telegram Bot setup
+# --------------------
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+bot = Bot(token=TELEGRAM_TOKEN)
+
+# Dispatcher to handle updates
+dispatcher = Dispatcher(bot, None, workers=0)
+
+# --------------------
+# Load LLM + FAISS
+# --------------------
 FAISS_PATH = "rag_assets/faiss_index"
 
-def load_vectorstore(faiss_path: str):
+def load_vectorstore():
     embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    db = FAISS.load_local(faiss_path, embeddings, allow_dangerous_deserialization=True)
-    return db
+    return FAISS.load_local(FAISS_PATH, embeddings, allow_dangerous_deserialization=True)
 
-def init_llm_from_groq(model_name: str = "llama-3.3-70b-versatile"):
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if not groq_key:
-        raise RuntimeError("GROQ_API_KEY not found in environment variables.")
-    llm = ChatGroq(groq_api_key=groq_key, model=model_name)
-    return llm
+def init_llm():
+    groq_key = os.getenv("GROQ_API_KEY")
+    return ChatGroq(groq_api_key=groq_key, model="llama-3.3-70b-versatile")
 
-def make_qa_chain(llm, vectorstore):
-    prompt_template = """You are Chikka, a friendly expert AI assistant specialized in backyard broiler farming.
-Provide helpful, conversational answers that are clear and focused. Be natural, avoid fluff.
+vectorstore = load_vectorstore()
+llm = init_llm()
+qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=vectorstore.as_retriever())
 
-Context: {context}
-Question: {question}
+# --------------------
+# Command Handlers
+# --------------------
+def start(update: Update, context):
+    update.message.reply_text("🐔 Hello! I’m Chikka, your broiler farming assistant. Ask me anything about poultry health, feeding, or management!")
 
-Answer in a friendly, expert tone."""
-    PROMPT = PromptTemplate(template=prompt_template, input_variables=["context", "question"])
+def handle_message(update: Update, context):
+    query = update.message.text
+    response = qa_chain.run(query)
+    update.message.reply_text(response)
 
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        retriever=vectorstore.as_retriever(),
-        return_source_documents=False,
-        chain_type_kwargs={"prompt": PROMPT}
-    )
-    return qa_chain
+dispatcher.add_handler(CommandHandler("start", start))
+dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
 
-# =======================
-# Global
-# =======================
-vectorstore = load_vectorstore(FAISS_PATH)
-llm = init_llm_from_groq()
-qa_chain = make_qa_chain(llm, vectorstore)
+# --------------------
+# Flask Routes
+# --------------------
+@app.route("/")
+def home():
+    return "Chikka Telegram Bot is running!", 200
 
-# =======================
-# Handlers
-# =======================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send welcome message when user starts the bot"""
-    await update.message.reply_text(
-        "👋 Hi! I’m 🐔 ChikkaBot, your friendly backyard broiler assistant.\n"
-        "Ask me anything about broiler care, feeding, housing, or diseases!"
-    )
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    if request.method == "POST":
+        update = Update.de_json(request.get_json(force=True), bot)
+        dispatcher.process_update(update)
+        return "ok", 200
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Help command"""
-    await update.message.reply_text("Just type your question, and I’ll do my best to help you with broiler farming 🐔.")
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle user messages"""
-    user_text = update.message.text
-    logger.info(f"User said: {user_text}")
-
-    await update.message.reply_text("🤔 Thinking...")
-
-    try:
-        out = qa_chain.invoke({"query": user_text})
-        result = out["result"] if isinstance(out, dict) else str(out)
-    except Exception as e:
-        result = f"⚠️ Sorry, something went wrong: {e}"
-
-    await update.message.reply_text(result)
-
-# =======================
-# Main
-# =======================
-def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    if not token:
-        raise RuntimeError("TELEGRAM_BOT_TOKEN not found in environment variables.")
-
-    app = Application.builder().token(token).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logger.info("🤖 Bot started polling...")
-    app.run_polling()
-
+# --------------------
+# Run Locally
+# --------------------
 if __name__ == "__main__":
-    main()
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
